@@ -1,0 +1,164 @@
+-- Referências aos serviços e jogador local
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local lp = Players.LocalPlayer
+
+-- Função para criar a GUI caso ela não exista
+local function createFarmToggleGui()
+    local playerGui = lp:WaitForChild("PlayerGui")
+    if playerGui:FindFirstChild("FarmToggleGui") then return end
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FarmToggleGui"
+    screenGui.Parent = playerGui
+
+    local distance = 15
+
+    -- Botão para alterar a distância
+    local distanceButton = Instance.new("TextButton")
+    distanceButton.Name = "DistanceButton"
+    distanceButton.Parent = screenGui
+    distanceButton.Size = UDim2.new(0, 150, 0, 50)
+    distanceButton.Position = UDim2.new(1, -160, 1, -120)
+    distanceButton.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+    distanceButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    distanceButton.Font = Enum.Font.SourceSans
+    distanceButton.TextSize = 20
+    distanceButton.Text = "Distance: " .. tostring(distance)
+    distanceButton.AutoButtonColor = false
+
+    local uicornerDistance = Instance.new("UICorner")
+    uicornerDistance.CornerRadius = UDim.new(0, 5)
+    uicornerDistance.Parent = distanceButton
+
+    local inputBox = Instance.new("TextBox")
+    inputBox.Parent = distanceButton
+    inputBox.Size = UDim2.new(1, -10, 1, -10)
+    inputBox.Position = UDim2.new(0, 5, 0, 5)
+    inputBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    inputBox.TextColor3 = Color3.fromRGB(0, 0, 0)
+    inputBox.Font = Enum.Font.SourceSans
+    inputBox.TextSize = 20
+    inputBox.PlaceholderText = "Enter distance"
+    inputBox.Visible = false
+
+    distanceButton.MouseButton1Click:Connect(function()
+        inputBox.Visible = true
+        inputBox:CaptureFocus()
+    end)
+
+    inputBox.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            local newDistance = tonumber(inputBox.Text)
+            if newDistance then
+                distance = newDistance
+                distanceButton.Text = "Distance: " .. tostring(distance)
+            else
+                distanceButton.Text = "Distance: " .. tostring(distance)
+            end
+        end
+        inputBox.Text = ""
+        inputBox.Visible = false
+    end)
+
+    local button = Instance.new("TextButton")
+    button.Name = "FarmToggleButton"
+    button.Parent = screenGui
+    button.Size = UDim2.new(0, 150, 0, 50)
+    button.Position = UDim2.new(1, -160, 1, -60)
+    button.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Font = Enum.Font.SourceSans
+    button.TextSize = 24
+    button.Text = "Ativado"
+    button.AutoButtonColor = false
+    button.TextYAlignment = Enum.TextYAlignment.Center
+
+    local uicornerToggle = Instance.new("UICorner")
+    uicornerToggle.CornerRadius = UDim.new(0, 5)
+    uicornerToggle.Parent = button
+
+    local tweenInfoButton = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local tweenInfoEnemy = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+    getgenv().Farm = true
+    local path = workspace:WaitForChild("Enemies")
+
+    -- Atualiza botão e colisão
+    local function updateButton()
+        if getgenv().Farm then
+            button.Text = "Ativado"
+            button.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        else
+            button.Text = "Desativado"
+            button.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        end
+
+        -- Ativa ou desativa colisão dos NPCs
+        for _, npc in ipairs(path:GetChildren()) do
+            for _, part in ipairs(npc:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = not getgenv().Farm
+                end
+            end
+        end
+    end
+
+    updateButton()
+
+    button.MouseButton1Click:Connect(function()
+        getgenv().Farm = not getgenv().Farm
+        updateButton()
+
+        local tween = TweenService:Create(button, tweenInfoButton, {BackgroundTransparency = 0.2})
+        tween:Play()
+        tween.Completed:Connect(function()
+            local tween2 = TweenService:Create(button, tweenInfoButton, {BackgroundTransparency = 0})
+            tween2:Play()
+        end)
+    end)
+
+    -- Move NPCs suavemente e ajusta colisão se necessário
+    local function BringNPCs()
+        while true do
+            if getgenv().Farm then
+                local character = lp.Character
+                if character then
+                    local playerHRP = character:FindFirstChild("HumanoidRootPart")
+                    if playerHRP then
+                        for _, npc in ipairs(path:GetChildren()) do
+                            pcall(function()
+                                local npcHRP = npc:FindFirstChild("HumanoidRootPart")
+                                local npcHumanoid = npc:FindFirstChild("Humanoid")
+                                if npcHRP and npcHumanoid and npcHumanoid.Health > 0 then
+                                    -- 🔁 Garante colisão desativada se ativo
+                                    for _, part in ipairs(npc:GetDescendants()) do
+                                        if part:IsA("BasePart") then
+                                            part.CanCollide = false
+                                        end
+                                    end
+
+                                    local targetCFrame = playerHRP.CFrame + playerHRP.CFrame.LookVector * distance
+                                    local tween = TweenService:Create(npcHRP, tweenInfoEnemy, {CFrame = targetCFrame})
+                                    tween:Play()
+                                end
+                            end)
+                        end
+                    end
+                end
+            end
+            task.wait(0.1)
+        end
+    end
+
+    spawn(BringNPCs)
+end
+
+-- Cria a GUI
+createFarmToggleGui()
+
+-- Recria a GUI no respawn
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    createFarmToggleGui()
+end)
