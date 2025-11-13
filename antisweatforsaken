@@ -1,0 +1,95 @@
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+
+local localPlayer = Players.LocalPlayer
+if not localPlayer then
+	warn("LocalPlayer not found.")
+	return
+end
+
+local PLACE_ID = game.PlaceId
+local WAIT_TIMEOUT = 5
+
+local function waitForChildTimeout(parent, name, timeout)
+	local start = tick()
+	while tick() - start < timeout do
+		local child = parent:FindFirstChild(name)
+		if child then return child end
+		task.wait(0.1)
+	end
+end
+
+local function getTimePlayed(plr)
+	if not plr then return end
+
+	local data = waitForChildTimeout(plr, "PlayerData", WAIT_TIMEOUT)
+	if not data then return end
+
+	local stats = data:FindFirstChild("Stats") or waitForChildTimeout(data, "Stats", WAIT_TIMEOUT)
+	if not stats then return end
+
+	local general = stats:FindFirstChild("General") or waitForChildTimeout(stats, "General", WAIT_TIMEOUT)
+	if not general then return end
+
+	local tp = general:FindFirstChild("TimePlayed") or waitForChildTimeout(general, "TimePlayed", WAIT_TIMEOUT)
+	if not tp then return end
+
+	local val = tonumber(tp.Value) or tonumber(tp:GetAttribute("Value"))
+	if not val then
+		pcall(function() val = tonumber(tp.Value) end)
+	end
+
+	return val
+end
+
+local myTime = getTimePlayed(localPlayer)
+if not myTime then
+	warn("Couldn't get LocalPlayer TimePlayed.")
+	return
+end
+
+local threshold = myTime - (myTime / 3)
+print(("My TimePlayed: %s | Threshold: %s"):format(myTime, threshold))
+
+local found = false
+for _, plr in ipairs(Players:GetPlayers()) do
+	if plr ~= localPlayer then
+		local t = getTimePlayed(plr)
+		if t then
+			print(("%s TimePlayed = %s"):format(plr.Name, t))
+			if t > threshold then
+				found = true
+				print(("Condition met: %s has %s > %s"):format(plr.Name, t, threshold))
+				break
+			end
+		else
+			print(("Couldn't read TimePlayed for %s."):format(plr.Name))
+		end
+	end
+end
+
+if not found then
+	print("No player exceeded the threshold.")
+	return
+end
+
+local ok, reserved = pcall(function()
+	return TeleportService:ReserveServer(PLACE_ID)
+end)
+
+if ok and reserved then
+	local success, err = pcall(function()
+		TeleportService:TeleportToPrivateServer(PLACE_ID, reserved, { localPlayer })
+	end)
+	if success then
+		print("Teleported to a private server.")
+	else
+		warn("Private server teleport failed:", err)
+		TeleportService:Teleport(PLACE_ID, localPlayer)
+	end
+else
+	warn("ReserveServer unavailable, using normal teleport.")
+	pcall(function()
+		TeleportService:Teleport(PLACE_ID, localPlayer)
+	end)
+end
