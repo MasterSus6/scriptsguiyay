@@ -120,14 +120,6 @@ end
 		activeThreat = false
 	end
 
-	-- Debug (só mostra se houver detecção real)
-	if closestDist < math.huge then
-		print(string.format(
-			"[AutoSprint] Nearest: %.1f studs | Speed: %.1f | Sprinting: %s",
-			closestDist, highestSpeed, tostring(sprinting)
-		))
-	end
-
 	-- Controle de sprint
 	if activeThreat and not sprinting then
 		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode[keybind], false, game)
@@ -137,3 +129,4 @@ end
 		sprinting = false
 	end
 end)
+
