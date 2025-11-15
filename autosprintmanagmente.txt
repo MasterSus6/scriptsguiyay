@@ -1,132 +1,274 @@
---// Auto Sprint When Killer is Near (Customizable, Smooth & Hysteresis)
+-- Auto Sprint Reactive v4.2 (optimized & cleaner)
+print("🚀 Auto Sprint Reactive v4.2 loading...")
 
-print("✅ Auto Sprint Reactive v3 loaded")
+-- CONFIG
+local DISTANCE_THRESHOLD = 110
+local SPEED_THRESHOLD = 12
+local HYSTERESIS_TIME = 0.1
+local DECISION_INTERVAL = 0.08
+local MIN_STAMINA = 1
+local STAMINA_RECOVER_TIME = 0.5
+local AUTO_SPRINT_TAP = true
+local TOGGLE_KEY = Enum.KeyCode.C
 
---// ====== CONFIGURAÇÕES ======
-local DISTANCE_THRESHOLD = 110     -- distância mínima (studs) pra reagir
-local SPEED_THRESHOLD = 12        -- velocidade mínima do killer pra acionar o sprint
-local HYSTERESIS_TIME = 0.1      -- tempo que mantém o sprint ativo após killer parar
-local DECISION_INTERVAL = 0.1     -- intervalo de decisão (em segundos)
---// ===========================
-
---// Serviços
+-- SERVICES
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
 
---// Player e dados básicos
+local VirtualInputManager
+pcall(function() VirtualInputManager = game:GetService("VirtualInputManager") end)
+
+-- STATE
 local player = Players.LocalPlayer
-repeat task.wait() until player.Character
-local char = player.Character
-local hrp = char:WaitForChild("HumanoidRootPart")
+local char, hrp
+local killersFolder
+local sprintModule
+local sprintKeycode = Enum.KeyCode.LeftShift
 
---// Caminhos e binds
-local killersFolder = Workspace:WaitForChild("Players"):WaitForChild("Killers")
-local sprintModule = require(ReplicatedStorage.Systems.Character.Game.Sprinting)
-local keybind = player:WaitForChild("PlayerData")
-	:WaitForChild("Settings")
-	:WaitForChild("Keybinds")
-	:WaitForChild("Sprinting").Value
-
---// Variáveis
+local lastPos = {}
+local velCache = {}
 local sprinting = false
-local lastPositions = {}
-local velocityBuffer = {}
-local lastDecision = 0
-local lastThreatTime = 0
+local autoOn = true
 local activeThreat = false
 
---// Funções auxiliares
-local function distance(a, b)
-	return (a.Position - b.Position).Magnitude
+local lastDecision = 0
+local lastThreat = 0
+local staminaLowTime = 0
+
+---------------------------------------------------------------------
+-- HELPERS
+---------------------------------------------------------------------
+
+local function safeRequireSprint()
+	local ok, mod = pcall(function()
+		return require(ReplicatedStorage.Systems.Character.Game.Sprinting)
+	end)
+	if not ok or not mod then return nil end
+
+	task.spawn(function()
+		for _ = 1, 50 do
+			if mod.DefaultsSet then break end
+			task.wait(0.03)
+		end
+	end)
+
+	return mod
 end
 
-local function getSpeed(obj)
+local function keyFromString(name)
+	for _, k in ipairs(Enum.KeyCode:GetEnumItems()) do
+		if k.Name == name then return k end
+	end
+end
+
+local function sendKey(isDown)
+	if not VirtualInputManager then return false end
+	local ok = pcall(function()
+		VirtualInputManager:SendKeyEvent(isDown, sprintKeycode, false, game)
+	end)
+	return ok
+end
+
+local function sprintStart()
+	if not sendKey(true) and sprintModule then
+		sprintModule.IsSprinting = true
+		if sprintModule.__sprintedEvent then pcall(function() sprintModule.__sprintedEvent:Fire(true) end) end
+	end
+end
+
+local function sprintStop()
+	if not sendKey(false) and sprintModule then
+		sprintModule.IsSprinting = false
+		if sprintModule.__sprintedEvent then pcall(function() sprintModule.__sprintedEvent:Fire(false) end) end
+	end
+end
+
+---------------------------------------------------------------------
+-- VELOCITY
+---------------------------------------------------------------------
+
+local function getSpeed(part)
 	local now = tick()
-	local lastData = lastPositions[obj]
-	local pos = obj.Position
+	local last = lastPos[part]
+	local pos = part.Position
 
-	if not lastData then
-		lastPositions[obj] = {pos = pos, t = now}
+	if not last then
+		lastPos[part] = {pos = pos, t = now}
+		velCache[part] = 0
 		return 0
 	end
 
-	local dt = now - lastData.t
-	if dt <= 0 then
-		return 0
-	end
+	local dt = now - last.t
+	if dt <= 0 then return velCache[part] end
 
-	local speed = (pos - lastData.pos).Magnitude / dt
-	lastPositions[obj] = {pos = pos, t = now}
+	local raw = (pos - last.pos).Magnitude / dt
+	local smoothed = velCache[part] * 0.55 + raw * 0.45
 
-	local prev = velocityBuffer[obj] or speed
-	local smooth = (prev * 0.6) + (speed * 0.4)
-	velocityBuffer[obj] = smooth
-	return smooth
+	-- reject absurd spikes
+	if smoothed > 400 then smoothed = velCache[part] end
+
+	lastPos[part] = {pos = pos, t = now}
+	velCache[part] = smoothed
+
+	return smoothed
 end
 
---// Loop principal
-RunService.Heartbeat:Connect(function()
-	if not hrp or not char or not char.Parent then return end
+---------------------------------------------------------------------
+-- CHARACTER SETUP
+---------------------------------------------------------------------
 
--- Bloqueia corrida se stamina estiver muito baixa
-if sprintModule.Stamina < 1 then
+local function refreshKillers()
+	local w = workspace
+	killersFolder =
+		w:FindFirstChild("Players") and w.Players:FindFirstChild("Killers")
+		or w:FindFirstChild("Killers")
+
+	if killersFolder then
+		print("AutoSprint: Killers =", killersFolder:GetFullName())
+	else
+		warn("AutoSprint: Killers not found yet.")
+	end
+end
+
+local function onCharacter(charNew)
+	char = charNew
+	hrp = char and char:WaitForChild("HumanoidRootPart", 5)
+
+	-- keybind
+	local ok, bind = pcall(function()
+		local pd = player:WaitForChild("PlayerData", 5)
+		return pd.Settings.Keybinds.Sprinting.Value
+	end)
+
+	if ok then
+		sprintKeycode = keyFromString(bind) or Enum.KeyCode.LeftShift
+	end
+
+	-- sprint module
+	sprintModule = safeRequireSprint()
+
+	print("AutoSprint: Character ready | Key:", sprintKeycode.Name)
+end
+
+if player.Character then
+	onCharacter(player.Character)
+end
+player.CharacterAdded:Connect(onCharacter)
+
+workspace.ChildAdded:Connect(function(c)
+	if c.Name == "Players" or c.Name == "Killers" then
+		task.wait(0.1)
+		refreshKillers()
+	end
+end)
+
+refreshKillers()
+
+---------------------------------------------------------------------
+-- MAIN LOOP
+---------------------------------------------------------------------
+
+RunService.Heartbeat:Connect(function()
+	local now = tick()
+
+	-- global toggle
+	if not autoOn then
+		if sprinting then sprintStop() sprinting = false end
+		return
+	end
+
+	if not char or not hrp or not killersFolder then
+		return
+	end
+
+-- stamina
+local stamina = sprintModule and (sprintModule.Stamina or sprintModule.MaxStamina) or math.huge
+
+-- if stamina exactly 100 → force sprint for 0.5 seconds
+if stamina == 100 and AUTO_SPRINT_TAP then
+	if not sprinting then
+		sprintStart()
+		sprinting = true
+	end
+	-- lock sprint for 0.5s without blocking the script
+	staminaLowTime = now + 0.5
+	return
+end
+
+-- low stamina: stop sprint and start recovery timer
+if stamina < MIN_STAMINA then
 	if sprinting then
-		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode[keybind], false, game)
+		sprintStop()
 		sprinting = false
 	end
-	getgenv().lowStaminaTime = tick()
+	staminaLowTime = now
 	return
 end
 
--- Espera 1 segundo de regeneração antes de permitir correr de novo
-if getgenv().lowStaminaTime and (tick() - getgenv().lowStaminaTime) < 0.5 then
+-- recovery cooldown (normal system)
+if now < staminaLowTime then
 	return
 end
 
+	-- throttle decision rate
+	if now - lastDecision < DECISION_INTERVAL then return end
+	lastDecision = now
 
-	-- Intervalo de decisão
-	if tick() - lastDecision < DECISION_INTERVAL then return end
-	lastDecision = tick()
+	-- scan killers
+	local threat = false
+	local nearest = math.huge
+	local topSpeed = 0
 
-	local threatDetected = false
-	local closestDist = math.huge
-	local highestSpeed = 0
-
-	for _, killer in ipairs(killersFolder:GetChildren()) do
-		local krp = killer:FindFirstChild("HumanoidRootPart")
-		if krp then
-			local dist = distance(hrp, krp)
+	for _, k in ipairs(killersFolder:GetChildren()) do
+		local root = k:FindFirstChild("HumanoidRootPart") or k.PrimaryPart
+		if root and root:IsA("BasePart") then
+			local dist = (hrp.Position - root.Position).Magnitude
 			if dist <= DISTANCE_THRESHOLD then
-				local spd = getSpeed(krp)
-				if spd > highestSpeed then
-					highestSpeed = spd
-				end
-				if dist <= DISTANCE_THRESHOLD and spd > SPEED_THRESHOLD then
-					threatDetected = true
-					closestDist = dist
+				local spd = getSpeed(root)
+				if spd > topSpeed then topSpeed = spd end
+				if spd > SPEED_THRESHOLD then
+					threat = true
+					if dist < nearest then nearest = dist end
 				end
 			end
 		end
 	end
 
-	-- Histerese (mantém ativo após killer parar)
-	if threatDetected then
-		lastThreatTime = tick()
+	-- hysteresis
+	if threat then
 		activeThreat = true
-	elseif tick() - lastThreatTime > HYSTERESIS_TIME then
+		lastThreat = now
+	elseif now - lastThreat > HYSTERESIS_TIME then
 		activeThreat = false
 	end
 
-	-- Controle de sprint
+	-- control sprint
 	if activeThreat and not sprinting then
-		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode[keybind], false, game)
+		sprintStart()
 		sprinting = true
+
 	elseif not activeThreat and sprinting then
-		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode[keybind], false, game)
+		sprintStop()
 		sprinting = false
 	end
 end)
 
+---------------------------------------------------------------------
+-- TOGGLE KEY
+---------------------------------------------------------------------
+
+UserInputService.InputBegan:Connect(function(i, g)
+	if not g and i.KeyCode == TOGGLE_KEY then
+		autoOn = not autoOn
+		print("AutoSprint:", autoOn and "ON" or "OFF")
+
+		if not autoOn and sprinting then
+			sprintStop()
+			sprinting = false
+		end
+	end
+end)
+
+print("🚀 Auto Sprint Reactive v4.2 ready")
