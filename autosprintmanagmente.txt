@@ -1,5 +1,5 @@
 -- Auto Sprint Reactive v4.2 (optimized & cleaner)
-print("🚀 Auto Sprint Reactive v4.2 loading...")
+print("[🚀 Auto Sprint v4.2] Loading...")
 
 -- CONFIG
 local DISTANCE_THRESHOLD = 110
@@ -271,4 +271,4 @@ UserInputService.InputBegan:Connect(function(i, g)
 	end
 end)
 
-print("🚀 Auto Sprint Reactive v4.2 ready")
+print("[🚀 Auto Sprint Reactive v4.2] Done!")
